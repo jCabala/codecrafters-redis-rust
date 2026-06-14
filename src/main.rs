@@ -10,7 +10,7 @@ fn main() {
     for stream in listener.incoming() {
         match stream {
             Ok(mut _stream) => {
-                if let Err(err) = _stream.write("PONG".as_bytes()) {
+                if let Err(err) = _stream.write("+PONG\r\n".as_bytes()) {
                     print!("write err: {}", err);
                 }
             }
