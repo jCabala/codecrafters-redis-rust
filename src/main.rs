@@ -1,53 +1,58 @@
 #![allow(unused_imports)]
 
-use std::{
-    io::{Read, Write},
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
 };
 
-fn main() {
+#[tokio::main]
+async fn main() {
     println!("Logs from your program will appear here!");
 
-    if let Err(err) = run() {
+    if let Err(err) = run().await {
         println!("server error: {}", err);
     }
 }
 
-fn run() -> std::io::Result<()> {
-    let listener = TcpListener::bind("127.0.0.1:6379")?;
+async fn run() -> std::io::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:6379").await?;
 
-    for stream in listener.incoming() {
-        match stream {
-            Ok(mut stream) => {
-                loop {
-                    match run_request(&mut stream) {
-                        Ok(false) => {
-                            // Client closed the connection.
-                            break;
-                        }
-                        Ok(true) => {
-                            // Handled one request, keep waiting for more.
-                        }
-                        Err(err) => {
-                            println!("connection error: {}", err);
-                            break;
-                        }
-                    }
-                }
+    loop {
+        match listener.accept().await {
+            Ok((stream, _addr)) => {
+                tokio::spawn(async move {
+                    handle_connection(stream).await;
+                });
             }
             Err(err) => {
                 println!("accept error: {}", err);
             }
         }
     }
-
-    Ok(())
 }
 
-fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
+async fn handle_connection(mut stream: TcpStream) {
+    loop {
+        match run_request(&mut stream).await {
+            Ok(false) => {
+                // Client closed the connection.
+                break;
+            }
+            Ok(true) => {
+                // Handled one request, keep waiting for more.
+            }
+            Err(err) => {
+                println!("connection error: {}", err);
+                break;
+            }
+        }
+    }
+}
+
+async fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
     let mut buffer = [0; 512];
 
-    let size = stream.read(&mut buffer)?;
+    let size = stream.read(&mut buffer).await?;
 
     if size == 0 {
         return Ok(false);
@@ -59,7 +64,7 @@ fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
         String::from_utf8_lossy(&buffer[..size])
     );
 
-    stream.write_all("+PONG\r\n".as_bytes())?;
+    stream.write_all("+PONG\r\n".as_bytes()).await?;
 
     Ok(true)
 }

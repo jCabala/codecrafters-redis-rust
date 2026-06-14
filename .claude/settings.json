@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo run *)",
+      "Bash(pkill -f target/debug/codecrafters-redis)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
+    ]
+  }
+}
