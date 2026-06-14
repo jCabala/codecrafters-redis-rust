@@ -9,7 +9,11 @@
       "Bash(printf '*1\\\\r\\\\n$4\\\\r\\\\nPING\\\\r\\\\n')",
       "Bash(timeout 2 nc localhost 6379)",
       "Bash(printf '*2\\\\r\\\\n$4\\\\r\\\\nECHO\\\\r\\\\n$3\\\\r\\\\nhey\\\\r\\\\n')",
-      "Bash(printf '*1\\\\r\\\\n$3\\\\r\\\\nFOO\\\\r\\\\n')"
+      "Bash(printf '*1\\\\r\\\\n$3\\\\r\\\\nFOO\\\\r\\\\n')",
+      "Bash(printf '*3\\\\r\\\\n$3\\\\r\\\\nSET\\\\r\\\\n$3\\\\r\\\\nfoo\\\\r\\\\n$3\\\\r\\\\nbar\\\\r\\\\n')",
+      "Bash(timeout 2 nc -q1 localhost 6379)",
+      "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$3\\\\r\\\\nfoo\\\\r\\\\n')",
+      "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$7\\\\r\\\\nmissing\\\\r\\\\n')"
     ],
     "additionalDirectories": [
       "/tmp"

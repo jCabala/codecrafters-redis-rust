@@ -1,8 +1,10 @@
 #![allow(unused_imports)]
 
 mod resp;
+mod store;
 
 use resp::{Command, CommandName, RespMessage};
+use store::Store;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -19,12 +21,14 @@ async fn main() {
 
 async fn run() -> std::io::Result<()> {
     let listener = TcpListener::bind("127.0.0.1:6379").await?;
+    let store = Store::new();
 
     loop {
         match listener.accept().await {
             Ok((stream, _addr)) => {
+                let store = store.clone();
                 tokio::spawn(async move {
-                    handle_connection(stream).await;
+                    handle_connection(stream, store).await;
                 });
             }
             Err(err) => {
@@ -34,9 +38,9 @@ async fn run() -> std::io::Result<()> {
     }
 }
 
-async fn handle_connection(mut stream: TcpStream) {
+async fn handle_connection(mut stream: TcpStream, store: Store) {
     loop {
-        match run_request(&mut stream).await {
+        match run_request(&mut stream, &store).await {
             Ok(false) => {
                 // Client closed the connection.
                 break;
@@ -52,7 +56,7 @@ async fn handle_connection(mut stream: TcpStream) {
     }
 }
 
-async fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
+async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<bool> {
     let mut buffer = [0; 512];
 
     let size = stream.read(&mut buffer).await?;
@@ -74,6 +78,24 @@ async fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
                 Some(arg) => RespMessage::BulkString(arg.clone()),
                 None => RespMessage::Error(
                     "ERR wrong number of arguments for 'echo' command".to_string(),
+                ),
+            },
+            CommandName::Set => match (command.args.first(), command.args.get(1)) {
+                (Some(key), Some(value)) => {
+                    store.set(key.clone(), value.clone());
+                    RespMessage::SimpleString("OK".to_string())
+                }
+                _ => RespMessage::Error(
+                    "ERR wrong number of arguments for 'set' command".to_string(),
+                ),
+            },
+            CommandName::Get => match command.args.first() {
+                Some(key) => match store.get(key) {
+                    Some(value) => RespMessage::BulkString(value),
+                    None => RespMessage::NullBulkString,
+                },
+                None => RespMessage::Error(
+                    "ERR wrong number of arguments for 'get' command".to_string(),
                 ),
             },
         },

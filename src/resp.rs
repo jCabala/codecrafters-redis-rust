@@ -37,6 +37,8 @@ impl RespMessage {
 pub enum CommandName {
     Ping,
     Echo,
+    Set,
+    Get,
 }
 
 impl CommandName {
@@ -46,6 +48,8 @@ impl CommandName {
         match name.to_uppercase().as_str() {
             "PING" => Ok(CommandName::Ping),
             "ECHO" => Ok(CommandName::Echo),
+            "SET" => Ok(CommandName::Set),
+            "GET" => Ok(CommandName::Get),
             _ => Err(name.to_string()),
         }
     }
