@@ -64,7 +64,44 @@ async fn run_request(stream: &mut TcpStream) -> std::io::Result<bool> {
         String::from_utf8_lossy(&buffer[..size])
     );
 
-    stream.write_all("+PONG\r\n".as_bytes()).await?;
+    let response = match parse_command(&buffer[..size]) {
+        Some(args) if !args.is_empty() => match args[0].to_uppercase().as_str() {
+            "PING" => "+PONG\r\n".to_string(),
+            "ECHO" => match args.get(1) {
+                Some(arg) => format!("${}\r\n{}\r\n", arg.len(), arg),
+                None => "-ERR wrong number of arguments for 'echo' command\r\n".to_string(),
+            },
+            cmd => format!("-ERR unknown command '{}'\r\n", cmd),
+        },
+        _ => "-ERR Protocol error: invalid request\r\n".to_string(),
+    };
+
+    stream.write_all(response.as_bytes()).await?;
 
     Ok(true)
+}
+
+/// Parses a RESP array of bulk strings (e.g. `*2\r\n$4\r\nECHO\r\n$3\r\nhey\r\n`)
+/// into its component strings.
+fn parse_command(input: &[u8]) -> Option<Vec<String>> {
+    let text = std::str::from_utf8(input).ok()?;
+    let mut lines = text.split("\r\n");
+
+    let header = lines.next()?;
+    let count: usize = header.strip_prefix('*')?.parse().ok()?;
+
+    let mut args = Vec::with_capacity(count);
+    for _ in 0..count {
+        let len_line = lines.next()?;
+        let len: usize = len_line.strip_prefix('$')?.parse().ok()?;
+
+        let data = lines.next()?;
+        if data.len() != len {
+            return None;
+        }
+
+        args.push(data.to_string());
+    }
+
+    Some(args)
 }
