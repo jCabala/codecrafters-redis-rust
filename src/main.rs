@@ -4,6 +4,7 @@ mod resp;
 mod store;
 
 use resp::{Command, CommandName, RespMessage};
+use std::time::Duration;
 use store::Store;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -81,10 +82,13 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                 ),
             },
             CommandName::Set => match (command.args.first(), command.args.get(1)) {
-                (Some(key), Some(value)) => {
-                    store.set(key.clone(), value.clone());
-                    RespMessage::SimpleString("OK".to_string())
-                }
+                (Some(key), Some(value)) => match parse_expiry(&command.args[2..]) {
+                    Ok(ttl) => {
+                        store.set(key.clone(), value.clone(), ttl);
+                        RespMessage::SimpleString("OK".to_string())
+                    }
+                    Err(err) => err,
+                },
                 _ => RespMessage::Error(
                     "ERR wrong number of arguments for 'set' command".to_string(),
                 ),
@@ -105,4 +109,24 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
     stream.write_all(response.encode().as_bytes()).await?;
 
     Ok(true)
+}
+
+/// Parses the optional `EX <seconds>` / `PX <milliseconds>` expiry option
+/// that may follow a `SET key value` command's required arguments.
+fn parse_expiry(opts: &[String]) -> Result<Option<Duration>, RespMessage> {
+    match opts {
+        [] => Ok(None),
+        [option, value] => {
+            let amount: u64 = value.parse().map_err(|_| {
+                RespMessage::Error("ERR value is not an integer or out of range".to_string())
+            })?;
+
+            match option.to_uppercase().as_str() {
+                "EX" => Ok(Some(Duration::from_secs(amount))),
+                "PX" => Ok(Some(Duration::from_millis(amount))),
+                _ => Err(RespMessage::Error("ERR syntax error".to_string())),
+            }
+        }
+        _ => Err(RespMessage::Error("ERR syntax error".to_string())),
+    }
 }
