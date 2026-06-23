@@ -39,6 +39,7 @@ pub enum CommandName {
     Echo,
     Set,
     Get,
+    Rpush,
 }
 
 impl CommandName {
@@ -50,6 +51,7 @@ impl CommandName {
             "ECHO" => Ok(CommandName::Echo),
             "SET" => Ok(CommandName::Set),
             "GET" => Ok(CommandName::Get),
+            "RPUSH" => Ok(CommandName::Rpush),
             _ => Err(name.to_string()),
         }
     }

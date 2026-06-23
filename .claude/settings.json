@@ -13,7 +13,10 @@
       "Bash(printf '*3\\\\r\\\\n$3\\\\r\\\\nSET\\\\r\\\\n$3\\\\r\\\\nfoo\\\\r\\\\n$3\\\\r\\\\nbar\\\\r\\\\n')",
       "Bash(timeout 2 nc -q1 localhost 6379)",
       "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$3\\\\r\\\\nfoo\\\\r\\\\n')",
-      "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$7\\\\r\\\\nmissing\\\\r\\\\n')"
+      "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$7\\\\r\\\\nmissing\\\\r\\\\n')",
+      "Bash(printf '*5\\\\r\\\\n$3\\\\r\\\\nSET\\\\r\\\\n$3\\\\r\\\\nfoo\\\\r\\\\n$3\\\\r\\\\nbar\\\\r\\\\n$2\\\\r\\\\nPX\\\\r\\\\n$3\\\\r\\\\n200\\\\r\\\\n')",
+      "Bash(printf '*3\\\\r\\\\n$3\\\\r\\\\nSET\\\\r\\\\n$10\\\\r\\\\npersistent\\\\r\\\\n$5\\\\r\\\\nvalue\\\\r\\\\n')",
+      "Bash(printf '*2\\\\r\\\\n$3\\\\r\\\\nGET\\\\r\\\\n$10\\\\r\\\\npersistent\\\\r\\\\n')"
     ],
     "additionalDirectories": [
       "/tmp"

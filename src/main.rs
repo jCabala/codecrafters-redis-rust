@@ -95,13 +95,29 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
             },
             CommandName::Get => match command.args.first() {
                 Some(key) => match store.get(key) {
-                    Some(value) => RespMessage::BulkString(value),
-                    None => RespMessage::NullBulkString,
+                    Ok(Some(value)) => RespMessage::BulkString(value),
+                    Ok(None) => RespMessage::NullBulkString,
+                    Err(err) => err,
                 },
                 None => RespMessage::Error(
                     "ERR wrong number of arguments for 'get' command".to_string(),
                 ),
             },
+            CommandName::Rpush => {
+                let mut args = command.args.into_iter();
+                let key = args.next();
+                let values: Vec<String> = args.collect();
+
+                match key {
+                    Some(key) if !values.is_empty() => match store.rpush(key, values) {
+                        Ok(len) => RespMessage::Integer(len as i64),
+                        Err(err) => err,
+                    },
+                    _ => RespMessage::Error(
+                        "ERR wrong number of arguments for 'rpush' command".to_string(),
+                    ),
+                }
+            }
         },
         Err(err) => err,
     };
