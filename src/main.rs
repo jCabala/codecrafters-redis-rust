@@ -104,19 +104,10 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                 ),
             },
             CommandName::Rpush => {
-                let mut args = command.args.into_iter();
-                let key = args.next();
-                let values: Vec<String> = args.collect();
-
-                match key {
-                    Some(key) if !values.is_empty() => match store.rpush(key, values) {
-                        Ok(len) => RespMessage::Integer(len as i64),
-                        Err(err) => err,
-                    },
-                    _ => RespMessage::Error(
-                        "ERR wrong number of arguments for 'rpush' command".to_string(),
-                    ),
-                }
+                dispatch_push(command.args, "rpush", |key, values| store.rpush(key, values))
+            }
+            CommandName::Lpush => {
+                dispatch_push(command.args, "lpush", |key, values| store.lpush(key, values))
             }
             CommandName::Lrange => {
                 match (
@@ -149,6 +140,29 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
     stream.write_all(response.encode().as_bytes()).await?;
 
     Ok(true)
+}
+
+/// Shared dispatch logic for `RPUSH`/`LPUSH`: splits `args` into a key and
+/// its values, calls `push`, and encodes the resulting list length.
+fn dispatch_push(
+    args: Vec<String>,
+    command_name: &str,
+    push: impl FnOnce(String, Vec<String>) -> Result<usize, RespMessage>,
+) -> RespMessage {
+    let mut args = args.into_iter();
+    let key = args.next();
+    let values: Vec<String> = args.collect();
+
+    match key {
+        Some(key) if !values.is_empty() => match push(key, values) {
+            Ok(len) => RespMessage::Integer(len as i64),
+            Err(err) => err,
+        },
+        _ => RespMessage::Error(format!(
+            "ERR wrong number of arguments for '{}' command",
+            command_name
+        )),
+    }
 }
 
 /// Parses the optional `EX <seconds>` / `PX <milliseconds>` expiry option

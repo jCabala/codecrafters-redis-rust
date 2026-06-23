@@ -39,6 +39,7 @@ pub enum CommandName {
     Set,
     Get,
     Rpush,
+    Lpush,
     Lrange,
 }
 
@@ -52,6 +53,7 @@ impl CommandName {
             "SET" => Ok(CommandName::Set),
             "GET" => Ok(CommandName::Get),
             "RPUSH" => Ok(CommandName::Rpush),
+            "LPUSH" => Ok(CommandName::Lpush),
             "LRANGE" => Ok(CommandName::Lrange),
             _ => Err(name.to_string()),
         }

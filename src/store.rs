@@ -74,6 +74,22 @@ impl Keyspace {
             self.0.remove(key);
         }
     }
+
+    /// Removes any expired keys among a random sample, so that keys with a
+    /// TTL that are never accessed again don't linger in memory forever.
+    fn remove_expired(&mut self) {
+        let expired: Vec<String> = self
+            .keys()
+            .choose_multiple(&mut rand::thread_rng(), EXPIRY_SAMPLE_SIZE)
+            .into_iter()
+            .filter(|key| self.is_expired(key))
+            .cloned()
+            .collect();
+
+        for key in expired {
+            self.remove(&key);
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -93,7 +109,7 @@ impl Store {
         let mut interval = tokio::time::interval(EXPIRY_SWEEP_INTERVAL);
         loop {
             interval.tick().await;
-            self.remove_expired();
+            self.data.lock().unwrap().remove_expired();
         }
     }
 
@@ -141,6 +157,36 @@ impl Store {
         }
     }
 
+    /// Prepends `values` to the list at `key`, one at a time (so the last
+    /// value in `values` ends up first), creating the list if it doesn't
+    /// exist, and returns the list's length after prepending.
+    pub fn lpush(&self, key: String, values: Vec<String>) -> Result<usize, RespMessage> {
+        let mut data = self.data.lock().unwrap();
+
+        match data.entry(key) {
+            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
+                Value::List(list) => {
+                    let mut prefix = values;
+                    prefix.reverse();
+                    prefix.append(list);
+                    *list = prefix;
+                    Ok(list.len())
+                }
+                Value::String(_) => Err(wrong_type_error()),
+            },
+            MapEntry::Vacant(vacant) => {
+                let mut values = values;
+                values.reverse();
+                let len = values.len();
+                vacant.insert(Entry {
+                    value: Value::List(values),
+                    expires_at: None,
+                });
+                Ok(len)
+            }
+        }
+    }
+
     /// Returns the elements of the list at `key` between `start` and `stop`
     /// (inclusive, zero-based, negative indexes count from the end), using
     /// the same out-of-range clamping rules as Redis's `LRANGE`.
@@ -171,23 +217,5 @@ impl Store {
         }
 
         Ok(list[start as usize..=stop as usize].to_vec())
-    }
-
-    /// Removes any expired keys among a random sample, so that keys with a
-    /// TTL that are never accessed again don't linger in memory forever.
-    fn remove_expired(&self) {
-        let mut data = self.data.lock().unwrap();
-
-        let expired: Vec<String> = data
-            .keys()
-            .choose_multiple(&mut rand::thread_rng(), EXPIRY_SAMPLE_SIZE)
-            .into_iter()
-            .filter(|key| data.is_expired(key))
-            .cloned()
-            .collect();
-
-        for key in expired {
-            data.remove(&key);
-        }
     }
 }
