@@ -9,6 +9,7 @@ pub enum RespMessage {
     Integer(i64),
     BulkString(String),
     NullBulkString,
+    NullArray,
     Array(Vec<RespMessage>),
 }
 
@@ -20,6 +21,7 @@ impl RespMessage {
             RespMessage::Integer(i) => format!(":{}\r\n", i),
             RespMessage::BulkString(s) => format!("${}\r\n{}\r\n", s.len(), s),
             RespMessage::NullBulkString => "$-1\r\n".to_string(),
+            RespMessage::NullArray => "*-1\r\n".to_string(),
             RespMessage::Array(items) => {
                 let mut out = format!("*{}\r\n", items.len());
                 for item in items {
@@ -41,6 +43,8 @@ pub enum CommandName {
     Rpush,
     Lpush,
     Lrange,
+    Llen,
+    Lpop,
 }
 
 impl CommandName {
@@ -55,6 +59,8 @@ impl CommandName {
             "RPUSH" => Ok(CommandName::Rpush),
             "LPUSH" => Ok(CommandName::Lpush),
             "LRANGE" => Ok(CommandName::Lrange),
+            "LLEN" => Ok(CommandName::Llen),
+            "LPOP" => Ok(CommandName::Lpop),
             _ => Err(name.to_string()),
         }
     }

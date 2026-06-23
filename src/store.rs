@@ -3,7 +3,7 @@
 use crate::resp::RespMessage;
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
-use std::collections::hash_map::Entry as MapEntry;
+use std::collections::hash_map::{Entry as MapEntry, VacantEntry};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,6 +34,17 @@ impl Entry {
 
 fn wrong_type_error() -> RespMessage {
     RespMessage::Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string())
+}
+
+/// Inserts a brand-new list entry for a key that didn't exist yet, returning
+/// the list's length.
+fn insert_new_list(vacant: VacantEntry<'_, String, Entry>, values: Vec<String>) -> usize {
+    let len = values.len();
+    vacant.insert(Entry {
+        value: Value::List(values),
+        expires_at: None,
+    });
+    len
 }
 
 /// A `HashMap` of keys to entries that transparently evicts an entry the
@@ -146,14 +157,7 @@ impl Store {
                 }
                 Value::String(_) => Err(wrong_type_error()),
             },
-            MapEntry::Vacant(vacant) => {
-                let len = values.len();
-                vacant.insert(Entry {
-                    value: Value::List(values),
-                    expires_at: None,
-                });
-                Ok(len)
-            }
+            MapEntry::Vacant(vacant) => Ok(insert_new_list(vacant, values)),
         }
     }
 
@@ -162,28 +166,19 @@ impl Store {
     /// exist, and returns the list's length after prepending.
     pub fn lpush(&self, key: String, values: Vec<String>) -> Result<usize, RespMessage> {
         let mut data = self.data.lock().unwrap();
+        let mut values = values;
+        values.reverse();
 
         match data.entry(key) {
             MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
                 Value::List(list) => {
-                    let mut prefix = values;
-                    prefix.reverse();
-                    prefix.append(list);
-                    *list = prefix;
+                    values.append(list);
+                    *list = values;
                     Ok(list.len())
                 }
                 Value::String(_) => Err(wrong_type_error()),
             },
-            MapEntry::Vacant(vacant) => {
-                let mut values = values;
-                values.reverse();
-                let len = values.len();
-                vacant.insert(Entry {
-                    value: Value::List(values),
-                    expires_at: None,
-                });
-                Ok(len)
-            }
+            MapEntry::Vacant(vacant) => Ok(insert_new_list(vacant, values)),
         }
     }
 
@@ -217,5 +212,38 @@ impl Store {
         }
 
         Ok(list[start as usize..=stop as usize].to_vec())
+    }
+
+    /// Returns the length of the list at `key`, or 0 if it doesn't exist.
+    pub fn llen(&self, key: &str) -> Result<usize, RespMessage> {
+        let mut data = self.data.lock().unwrap();
+        match data.get(key) {
+            Some(Entry { value: Value::List(list), .. }) => Ok(list.len()),
+            Some(Entry { value: Value::String(_), .. }) => Err(wrong_type_error()),
+            None => Ok(0),
+        }
+    }
+
+    /// Removes and returns up to `count` elements from the front of the list
+    /// at `key`. Returns `None` if the key doesn't exist (distinct from `Some(vec![])`,
+    /// which means the key exists but `count` was 0). The key is removed
+    /// entirely once its list becomes empty.
+    pub fn lpop(&self, key: &str, count: usize) -> Result<Option<Vec<String>>, RespMessage> {
+        let mut data = self.data.lock().unwrap();
+
+        match data.entry(key.to_string()) {
+            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
+                Value::List(list) => {
+                    let count = count.min(list.len());
+                    let popped: Vec<String> = list.drain(..count).collect();
+                    if list.is_empty() {
+                        occupied.remove();
+                    }
+                    Ok(Some(popped))
+                }
+                Value::String(_) => Err(wrong_type_error()),
+            },
+            MapEntry::Vacant(_) => Ok(None),
+        }
     }
 }

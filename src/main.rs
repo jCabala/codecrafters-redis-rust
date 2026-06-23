@@ -133,6 +133,40 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     ),
                 }
             }
+            CommandName::Llen => match command.args.first() {
+                Some(key) => match store.llen(key) {
+                    Ok(len) => RespMessage::Integer(len as i64),
+                    Err(err) => err,
+                },
+                None => RespMessage::Error(
+                    "ERR wrong number of arguments for 'llen' command".to_string(),
+                ),
+            },
+            CommandName::Lpop => match (command.args.first(), command.args.get(1)) {
+                (Some(key), None) => match store.lpop(key, 1) {
+                    Ok(Some(mut values)) => match values.pop() {
+                        Some(value) => RespMessage::BulkString(value),
+                        None => RespMessage::NullBulkString,
+                    },
+                    Ok(None) => RespMessage::NullBulkString,
+                    Err(err) => err,
+                },
+                (Some(key), Some(count)) => match count.parse::<usize>() {
+                    Ok(count) => match store.lpop(key, count) {
+                        Ok(Some(values)) => RespMessage::Array(
+                            values.into_iter().map(RespMessage::BulkString).collect(),
+                        ),
+                        Ok(None) => RespMessage::NullArray,
+                        Err(err) => err,
+                    },
+                    Err(_) => RespMessage::Error(
+                        "ERR value is not an integer or out of range".to_string(),
+                    ),
+                },
+                (None, _) => RespMessage::Error(
+                    "ERR wrong number of arguments for 'lpop' command".to_string(),
+                ),
+            },
         },
         Err(err) => err,
     };
