@@ -118,6 +118,30 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     ),
                 }
             }
+            CommandName::Lrange => {
+                match (
+                    command.args.first(),
+                    command.args.get(1),
+                    command.args.get(2),
+                ) {
+                    (Some(key), Some(start), Some(stop)) => {
+                        match (start.parse::<i64>(), stop.parse::<i64>()) {
+                            (Ok(start), Ok(stop)) => match store.lrange(key, start, stop) {
+                                Ok(values) => RespMessage::Array(
+                                    values.into_iter().map(RespMessage::BulkString).collect(),
+                                ),
+                                Err(err) => err,
+                            },
+                            _ => RespMessage::Error(
+                                "ERR value is not an integer or out of range".to_string(),
+                            ),
+                        }
+                    }
+                    _ => RespMessage::Error(
+                        "ERR wrong number of arguments for 'lrange' command".to_string(),
+                    ),
+                }
+            }
         },
         Err(err) => err,
     };

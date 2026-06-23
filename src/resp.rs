@@ -2,7 +2,6 @@
 //! Protocol) used by this server.
 
 /// A RESP value, used for encoding responses sent back to the client.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum RespMessage {
     SimpleString(String),
@@ -40,6 +39,7 @@ pub enum CommandName {
     Set,
     Get,
     Rpush,
+    Lrange,
 }
 
 impl CommandName {
@@ -52,6 +52,7 @@ impl CommandName {
             "SET" => Ok(CommandName::Set),
             "GET" => Ok(CommandName::Get),
             "RPUSH" => Ok(CommandName::Rpush),
+            "LRANGE" => Ok(CommandName::Lrange),
             _ => Err(name.to_string()),
         }
     }

@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 const EXPIRY_SAMPLE_SIZE: usize = 20;
 
 /// How often to run the active expiry sweep.
-const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_millis(100);
+const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_millis(1000);
 
 /// A key's value, typed per Redis's data model (a key holds exactly one type
 /// at a time).
@@ -36,9 +36,49 @@ fn wrong_type_error() -> RespMessage {
     RespMessage::Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string())
 }
 
+/// A `HashMap` of keys to entries that transparently evicts an entry the
+/// moment it's found to be expired, so callers never have to remember to
+/// check expiry themselves before reading or writing a key.
+#[derive(Default)]
+struct Keyspace(HashMap<String, Entry>);
+
+impl Keyspace {
+    fn get(&mut self, key: &str) -> Option<&Entry> {
+        self.evict_if_expired(key);
+        self.0.get(key)
+    }
+
+    fn entry(&mut self, key: String) -> MapEntry<'_, String, Entry> {
+        self.evict_if_expired(&key);
+        self.0.entry(key)
+    }
+
+    fn insert(&mut self, key: String, entry: Entry) {
+        self.0.insert(key, entry);
+    }
+
+    fn keys(&self) -> impl Iterator<Item = &String> {
+        self.0.keys()
+    }
+
+    fn is_expired(&self, key: &str) -> bool {
+        self.0.get(key).is_some_and(|entry| entry.is_expired())
+    }
+
+    fn remove(&mut self, key: &str) {
+        self.0.remove(key);
+    }
+
+    fn evict_if_expired(&mut self, key: &str) {
+        if self.is_expired(key) {
+            self.0.remove(key);
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct Store {
-    data: Arc<Mutex<HashMap<String, Entry>>>,
+    data: Arc<Mutex<Keyspace>>,
 }
 
 impl Store {
@@ -59,7 +99,6 @@ impl Store {
 
     pub fn get(&self, key: &str) -> Result<Option<String>, RespMessage> {
         let mut data = self.data.lock().unwrap();
-        Self::evict_if_expired(&mut data, key);
         match data.get(key) {
             Some(Entry { value: Value::String(s), .. }) => Ok(Some(s.clone())),
             Some(Entry { value: Value::List(_), .. }) => Err(wrong_type_error()),
@@ -82,7 +121,6 @@ impl Store {
     /// exist, and returns the list's length after appending.
     pub fn rpush(&self, key: String, values: Vec<String>) -> Result<usize, RespMessage> {
         let mut data = self.data.lock().unwrap();
-        Self::evict_if_expired(&mut data, &key);
 
         match data.entry(key) {
             MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
@@ -103,10 +141,36 @@ impl Store {
         }
     }
 
-    fn evict_if_expired(data: &mut HashMap<String, Entry>, key: &str) {
-        if data.get(key).is_some_and(|entry| entry.is_expired()) {
-            data.remove(key);
+    /// Returns the elements of the list at `key` between `start` and `stop`
+    /// (inclusive, zero-based, negative indexes count from the end), using
+    /// the same out-of-range clamping rules as Redis's `LRANGE`.
+    pub fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RespMessage> {
+        let mut data = self.data.lock().unwrap();
+
+        let list = match data.get(key) {
+            Some(Entry {
+                value: Value::List(list),
+                ..
+            }) => list,
+            Some(Entry {
+                value: Value::String(_),
+                ..
+            }) => return Err(wrong_type_error()),
+            None => return Ok(Vec::new()),
+        };
+
+        let len = list.len() as i64;
+        let start = if start < 0 { (len + start).max(0) } else { start };
+        let mut stop: i64 = if stop < 0 { len + stop } else { stop };
+
+        if start > stop || start >= len {
+            return Ok(Vec::new());
         }
+        if stop >= len {
+            stop = len - 1;
+        }
+
+        Ok(list[start as usize..=stop as usize].to_vec())
     }
 
     /// Removes any expired keys among a random sample, so that keys with a
@@ -118,7 +182,7 @@ impl Store {
             .keys()
             .choose_multiple(&mut rand::thread_rng(), EXPIRY_SAMPLE_SIZE)
             .into_iter()
-            .filter(|key| data[*key].is_expired())
+            .filter(|key| data.is_expired(key))
             .cloned()
             .collect();
 
