@@ -42,6 +42,17 @@ impl Store {
         }
     }
 
+    /// Returns the Redis type name of the value at `key`, or `"none"` if it
+    /// doesn't exist.
+    pub fn key_type(&self, key: &str) -> &'static str {
+        let mut data = self.data.lock().unwrap();
+        match data.get(key) {
+            Some(Entry { value: Value::String(_), .. }) => "string",
+            Some(Entry { value: Value::List(_), .. }) => "list",
+            None => "none",
+        }
+    }
+
     pub fn set(&self, key: String, value: String, ttl: Option<Duration>) {
         let expires_at = ttl.map(|d| Instant::now() + d);
         let mut data = self.data.lock().unwrap();

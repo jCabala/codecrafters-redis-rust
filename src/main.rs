@@ -183,6 +183,12 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     "ERR wrong number of arguments for 'blpop' command".to_string(),
                 ),
             },
+            CommandName::Type => match command.args.first() {
+                Some(key) => RespMessage::SimpleString(store.key_type(key).to_string()),
+                None => RespMessage::Error(
+                    "ERR wrong number of arguments for 'type' command".to_string(),
+                ),
+            },
         },
         Err(err) => err,
     };

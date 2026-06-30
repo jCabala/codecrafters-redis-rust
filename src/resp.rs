@@ -46,6 +46,7 @@ pub enum CommandName {
     Llen,
     Lpop,
     Blpop,
+    Type,
 }
 
 impl CommandName {
@@ -63,6 +64,7 @@ impl CommandName {
             "LLEN" => Ok(CommandName::Llen),
             "LPOP" => Ok(CommandName::Lpop),
             "BLPOP" => Ok(CommandName::Blpop),
+            "TYPE" => Ok(CommandName::Type),
             _ => Err(name.to_string()),
         }
     }
