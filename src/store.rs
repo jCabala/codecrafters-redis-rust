@@ -2,12 +2,14 @@
 
 mod keyspace;
 mod list;
+mod stream;
 
 use crate::resp::RespMessage;
 use keyspace::{create_list, wrong_type_error, Entry, Keyspace, Value};
 use std::collections::hash_map::Entry as MapEntry;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use stream::Stream;
 
 /// How often to run the active expiry sweep.
 const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_millis(1000);
@@ -37,7 +39,7 @@ impl Store {
         let mut data = self.data.lock().unwrap();
         match data.get(key) {
             Some(Entry { value: Value::String(s), .. }) => Ok(Some(s.clone())),
-            Some(Entry { value: Value::List(_), .. }) => Err(wrong_type_error()),
+            Some(Entry { value: Value::List(_) | Value::Stream(_), .. }) => Err(wrong_type_error()),
             None => Ok(None),
         }
     }
@@ -49,6 +51,7 @@ impl Store {
         match data.get(key) {
             Some(Entry { value: Value::String(_), .. }) => "string",
             Some(Entry { value: Value::List(_), .. }) => "list",
+            Some(Entry { value: Value::Stream(_), .. }) => "stream",
             None => "none",
         }
     }
@@ -78,7 +81,7 @@ impl Store {
         match data.entry(key) {
             MapEntry::Occupied(occupied) => match &occupied.get().value {
                 Value::List(list) => Ok(list.push_back(values)),
-                Value::String(_) => Err(wrong_type_error()),
+                Value::String(_) | Value::Stream(_) => Err(wrong_type_error()),
             },
             MapEntry::Vacant(vacant) => Ok(create_list(vacant).push_back(values)),
         }
@@ -93,7 +96,7 @@ impl Store {
         match data.entry(key) {
             MapEntry::Occupied(occupied) => match &occupied.get().value {
                 Value::List(list) => Ok(list.push_front(values)),
-                Value::String(_) => Err(wrong_type_error()),
+                Value::String(_) | Value::Stream(_) => Err(wrong_type_error()),
             },
             MapEntry::Vacant(vacant) => Ok(create_list(vacant).push_front(values)),
         }
@@ -106,7 +109,7 @@ impl Store {
         let mut data = self.data.lock().unwrap();
         match data.get(key) {
             Some(Entry { value: Value::List(list), .. }) => Ok(list.range(start, stop)),
-            Some(Entry { value: Value::String(_), .. }) => Err(wrong_type_error()),
+            Some(Entry { value: Value::String(_) | Value::Stream(_), .. }) => Err(wrong_type_error()),
             None => Ok(Vec::new()),
         }
     }
@@ -116,7 +119,7 @@ impl Store {
         let mut data = self.data.lock().unwrap();
         match data.get(key) {
             Some(Entry { value: Value::List(list), .. }) => Ok(list.len()),
-            Some(Entry { value: Value::String(_), .. }) => Err(wrong_type_error()),
+            Some(Entry { value: Value::String(_) | Value::Stream(_), .. }) => Err(wrong_type_error()),
             None => Ok(0),
         }
     }
@@ -137,7 +140,7 @@ impl Store {
                     }
                     Ok(Some(popped))
                 }
-                Value::String(_) => Err(wrong_type_error()),
+                Value::String(_) | Value::Stream(_) => Err(wrong_type_error()),
             },
             MapEntry::Vacant(_) => Ok(None),
         }
@@ -153,12 +156,39 @@ impl Store {
             match data.entry(key) {
                 MapEntry::Occupied(occupied) => match &occupied.get().value {
                     Value::List(list) => Arc::clone(list),
-                    Value::String(_) => return Err(wrong_type_error()),
+                    Value::String(_) | Value::Stream(_) => return Err(wrong_type_error()),
                 },
                 MapEntry::Vacant(vacant) => create_list(vacant),
             }
         };
 
         Ok(list.pop_blocking(timeout).await)
+    }
+
+    /// Appends an entry with the given `id` and `fields` to the stream at
+    /// `key`, creating it if it doesn't exist, and returns the entry's id.
+    pub fn xadd(
+        &self,
+        key: String,
+        id: String,
+        fields: Vec<(String, String)>,
+    ) -> Result<String, RespMessage> {
+        let mut data = self.data.lock().unwrap();
+
+        match data.entry(key) {
+            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
+                Value::Stream(stream) => Ok(stream.xadd(id, fields)),
+                Value::String(_) | Value::List(_) => Err(wrong_type_error()),
+            },
+            MapEntry::Vacant(vacant) => {
+                let mut stream = Stream::new();
+                let id = stream.xadd(id, fields);
+                vacant.insert(Entry {
+                    value: Value::Stream(stream),
+                    expires_at: None,
+                });
+                Ok(id)
+            }
+        }
     }
 }

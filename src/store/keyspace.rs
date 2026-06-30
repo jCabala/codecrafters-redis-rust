@@ -1,6 +1,7 @@
 //! The keyspace: a map of keys to typed, expiring values.
 
 use super::list::BlockingList;
+use super::stream::Stream;
 use crate::resp::RespMessage;
 use rand::seq::IteratorRandom;
 use std::collections::HashMap;
@@ -21,6 +22,7 @@ pub(super) fn wrong_type_error() -> RespMessage {
 pub(super) enum Value {
     String(String),
     List(Arc<BlockingList>),
+    Stream(Stream),
 }
 
 pub(super) struct Entry {

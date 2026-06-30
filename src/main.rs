@@ -189,6 +189,28 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     "ERR wrong number of arguments for 'type' command".to_string(),
                 ),
             },
+            CommandName::Xadd => {
+                let mut args = command.args.into_iter();
+                let key = args.next();
+                let id = args.next();
+                let rest: Vec<String> = args.collect();
+
+                match (key, id) {
+                    (Some(key), Some(id)) if !rest.is_empty() && rest.len() % 2 == 0 => {
+                        let fields = rest
+                            .chunks_exact(2)
+                            .map(|pair| (pair[0].clone(), pair[1].clone()))
+                            .collect();
+                        match store.xadd(key, id, fields) {
+                            Ok(id) => RespMessage::BulkString(id),
+                            Err(err) => err,
+                        }
+                    }
+                    _ => RespMessage::Error(
+                        "ERR wrong number of arguments for 'xadd' command".to_string(),
+                    ),
+                }
+            }
         },
         Err(err) => err,
     };
