@@ -3,6 +3,7 @@
 mod keyspace;
 mod list;
 mod stream;
+mod stream_id;
 
 use crate::resp::RespMessage;
 use keyspace::{create_list, wrong_type_error, Entry, Keyspace, Value};
@@ -165,29 +166,32 @@ impl Store {
         Ok(list.pop_blocking(timeout).await)
     }
 
-    /// Appends an entry with the given `id` and `fields` to the stream at
-    /// `key`, creating it if it doesn't exist, and returns the entry's id.
+    /// Validates and appends an entry with the given `id` and `fields` to
+    /// the stream at `key`, creating it if it doesn't exist, and returns
+    /// the entry's id. A key is never created if the id fails validation.
     pub fn xadd(
         &self,
         key: String,
-        id: String,
+        id: &str,
         fields: Vec<(String, String)>,
     ) -> Result<String, RespMessage> {
         let mut data = self.data.lock().unwrap();
 
         match data.entry(key) {
             MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
-                Value::Stream(stream) => Ok(stream.xadd(id, fields)),
+                Value::Stream(stream) => stream.xadd(id, fields),
                 Value::String(_) | Value::List(_) => Err(wrong_type_error()),
             },
             MapEntry::Vacant(vacant) => {
                 let mut stream = Stream::new();
-                let id = stream.xadd(id, fields);
-                vacant.insert(Entry {
-                    value: Value::Stream(stream),
-                    expires_at: None,
-                });
-                Ok(id)
+                let result = stream.xadd(id, fields);
+                if result.is_ok() {
+                    vacant.insert(Entry {
+                        value: Value::Stream(stream),
+                        expires_at: None,
+                    });
+                }
+                result
             }
         }
     }

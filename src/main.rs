@@ -201,7 +201,7 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                             .chunks_exact(2)
                             .map(|pair| (pair[0].clone(), pair[1].clone()))
                             .collect();
-                        match store.xadd(key, id, fields) {
+                        match store.xadd(key, &id, fields) {
                             Ok(id) => RespMessage::BulkString(id),
                             Err(err) => err,
                         }
