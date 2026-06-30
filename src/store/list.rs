@@ -8,10 +8,10 @@ use tokio::sync::oneshot;
 /// A list value with its own internal locking, so a client blocked in
 /// `pop_blocking` never has to hold the outer `Keyspace` lock while waiting.
 ///
-/// Maintains the invariant that `waiters` is only ever non-empty while
-/// `items` is empty: every push hands values directly to the oldest waiter
-/// before ever touching `items`, and a waiter is only ever registered after
-/// `items` has already been found empty.
+/// Every push appends/prepends to `items` first (so its reported length is
+/// always accurate, matching real Redis even when waiters are present), then
+/// drains matched waiter/item pairs from the front. After every push or pop
+/// completes, `waiters` is only ever non-empty while `items` is empty.
 pub(super) struct BlockingList {
     state: Mutex<ListState>,
 }
@@ -31,48 +31,44 @@ impl BlockingList {
         }
     }
 
-    /// Appends `values` to the back of the list, in order, handing each one
-    /// directly to the oldest blocked waiter (if any) instead of storing it.
+    /// Appends `values` to the back of the list and returns its length
+    /// immediately afterward, then wakes any waiters with the front
+    /// elements they're owed.
     pub(super) fn push_back(&self, values: Vec<String>) -> usize {
         let mut state = self.state.lock().unwrap();
-        for value in values {
-            if let Some(value) = Self::offer_to_waiters(&mut state.waiters, value) {
-                state.items.push(value);
-            }
-        }
-        state.items.len()
+        state.items.extend(values);
+        let len = state.items.len();
+        Self::wake_waiters(&mut state);
+        len
     }
 
     /// Prepends `values` to the front of the list, one at a time (so the
-    /// last value ends up first), handing each one directly to the oldest
-    /// blocked waiter (if any) instead of storing it.
+    /// last value ends up first), and returns its length immediately
+    /// afterward, then wakes any waiters with the front elements they're
+    /// owed.
     pub(super) fn push_front(&self, values: Vec<String>) -> usize {
         let mut state = self.state.lock().unwrap();
-        let mut remainder = Vec::new();
+        let mut new_items: Vec<String> = values.into_iter().rev().collect();
+        new_items.append(&mut state.items);
+        state.items = new_items;
 
-        for value in values.into_iter().rev() {
-            if let Some(value) = Self::offer_to_waiters(&mut state.waiters, value) {
-                remainder.push(value);
-            }
-        }
-
-        remainder.append(&mut state.items);
-        state.items = remainder;
-        state.items.len()
+        let len = state.items.len();
+        Self::wake_waiters(&mut state);
+        len
     }
 
-    /// Tries to hand `value` to the oldest waiter, skipping any whose
-    /// receiver has already been dropped. Returns `Some(value)` (unchanged)
-    /// if there were no live waiters to take it.
-    fn offer_to_waiters(waiters: &mut VecDeque<oneshot::Sender<String>>, value: String) -> Option<String> {
-        let mut value = value;
-        while let Some(sender) = waiters.pop_front() {
-            match sender.send(value) {
-                Ok(()) => return None,
-                Err(unsent) => value = unsent,
+    /// Hands front elements to waiters one at a time (oldest waiter first)
+    /// until either runs out. A waiter whose receiver has already been
+    /// dropped is skipped and its would-be element is left in place for the
+    /// next waiter.
+    fn wake_waiters(state: &mut ListState) {
+        while !state.waiters.is_empty() && !state.items.is_empty() {
+            let sender = state.waiters.pop_front().unwrap();
+            let value = state.items.remove(0);
+            if let Err(value) = sender.send(value) {
+                state.items.insert(0, value);
             }
         }
-        Some(value)
     }
 
     /// Removes and returns up to `count` elements from the front of the
