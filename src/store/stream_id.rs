@@ -20,6 +20,7 @@ pub(super) struct StreamId {
 
 impl StreamId {
     pub(super) const ZERO: StreamId = StreamId { ms: 0, seq: 0 };
+    const MAX: StreamId = StreamId { ms: u64::MAX, seq: u64::MAX };
 
     /// Picks the next sequence number for `ms`: one past the last entry's
     /// sequence number if it shares the same `ms`, otherwise 0.
@@ -28,16 +29,28 @@ impl StreamId {
         StreamId { ms, seq }
     }
 
-    /// Parses an `XRANGE` start bound: `<ms>-<seq>`, or just `<ms>` (in
-    /// which case the sequence number defaults to 0).
+    /// Parses an `XRANGE` start bound: `-` (the smallest possible id),
+    /// `<ms>-<seq>`, or just `<ms>` (in which case the sequence number
+    /// defaults to 0).
     pub(super) fn parse_range_start(value: &str) -> Option<StreamId> {
-        Self::parse_bound(value, 0)
+        Self::parse_range_bound(value, 0)
     }
 
-    /// Parses an `XRANGE` end bound: `<ms>-<seq>`, or just `<ms>` (in which
-    /// case the sequence number defaults to the maximum possible value).
+    /// Parses an `XRANGE` end bound: `+` (the largest possible id),
+    /// `<ms>-<seq>`, or just `<ms>` (in which case the sequence number
+    /// defaults to the maximum possible value).
     pub(super) fn parse_range_end(value: &str) -> Option<StreamId> {
-        Self::parse_bound(value, u64::MAX)
+        Self::parse_range_bound(value, u64::MAX)
+    }
+
+    /// `-`/`+` (the smallest/largest possible id) are accepted for either
+    /// bound, since they're just fixed ids regardless of position.
+    fn parse_range_bound(value: &str, default_seq: u64) -> Option<StreamId> {
+        match value {
+            "-" => Some(StreamId::ZERO),
+            "+" => Some(StreamId::MAX),
+            _ => Self::parse_bound(value, default_seq),
+        }
     }
 
     fn parse_bound(value: &str, default_seq: u64) -> Option<StreamId> {
