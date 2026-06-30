@@ -167,6 +167,22 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     "ERR wrong number of arguments for 'lpop' command".to_string(),
                 ),
             },
+            CommandName::Blpop => match (command.args.first(), command.args.get(1)) {
+                (Some(key), Some(timeout_str)) => match parse_blpop_timeout(timeout_str) {
+                    Ok(timeout) => match store.blpop(key.clone(), timeout).await {
+                        Ok(Some(value)) => RespMessage::Array(vec![
+                            RespMessage::BulkString(key.clone()),
+                            RespMessage::BulkString(value),
+                        ]),
+                        Ok(None) => RespMessage::NullArray,
+                        Err(err) => err,
+                    },
+                    Err(err) => err,
+                },
+                _ => RespMessage::Error(
+                    "ERR wrong number of arguments for 'blpop' command".to_string(),
+                ),
+            },
         },
         Err(err) => err,
     };
@@ -197,6 +213,25 @@ fn dispatch_push(
             command_name
         )),
     }
+}
+
+/// Parses `BLPOP`'s timeout argument (seconds, possibly fractional). `0`
+/// means block forever, represented here as `None`.
+fn parse_blpop_timeout(value: &str) -> Result<Option<Duration>, RespMessage> {
+    let seconds: f64 = value.parse().map_err(|_| {
+        RespMessage::Error("ERR timeout is not a float or out of range".to_string())
+    })?;
+
+    if seconds < 0.0 {
+        return Err(RespMessage::Error("ERR timeout is negative".to_string()));
+    }
+    if seconds == 0.0 {
+        return Ok(None);
+    }
+
+    Duration::try_from_secs_f64(seconds).map(Some).map_err(|_| {
+        RespMessage::Error("ERR timeout is not a float or out of range".to_string())
+    })
 }
 
 /// Parses the optional `EX <seconds>` / `PX <milliseconds>` expiry option

@@ -1,107 +1,16 @@
 //! Shared in-memory key-value store.
 
+mod keyspace;
+mod list;
+
 use crate::resp::RespMessage;
-use rand::seq::IteratorRandom;
-use std::collections::HashMap;
-use std::collections::hash_map::{Entry as MapEntry, VacantEntry};
+use keyspace::{create_list, wrong_type_error, Entry, Keyspace, Value};
+use std::collections::hash_map::Entry as MapEntry;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Number of keys to randomly sample on each expiry sweep, mirroring Redis's
-/// active expiry cycle (rather than scanning the whole keyspace).
-const EXPIRY_SAMPLE_SIZE: usize = 20;
-
 /// How often to run the active expiry sweep.
 const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_millis(1000);
-
-/// A key's value, typed per Redis's data model (a key holds exactly one type
-/// at a time).
-enum Value {
-    String(String),
-    List(Vec<String>),
-}
-
-struct Entry {
-    value: Value,
-    expires_at: Option<Instant>,
-}
-
-impl Entry {
-    fn is_expired(&self) -> bool {
-        self.expires_at.is_some_and(|t| Instant::now() >= t)
-    }
-}
-
-fn wrong_type_error() -> RespMessage {
-    RespMessage::Error("WRONGTYPE Operation against a key holding the wrong kind of value".to_string())
-}
-
-/// Inserts a brand-new list entry for a key that didn't exist yet, returning
-/// the list's length.
-fn insert_new_list(vacant: VacantEntry<'_, String, Entry>, values: Vec<String>) -> usize {
-    let len = values.len();
-    vacant.insert(Entry {
-        value: Value::List(values),
-        expires_at: None,
-    });
-    len
-}
-
-/// A `HashMap` of keys to entries that transparently evicts an entry the
-/// moment it's found to be expired, so callers never have to remember to
-/// check expiry themselves before reading or writing a key.
-#[derive(Default)]
-struct Keyspace(HashMap<String, Entry>);
-
-impl Keyspace {
-    fn get(&mut self, key: &str) -> Option<&Entry> {
-        self.evict_if_expired(key);
-        self.0.get(key)
-    }
-
-    fn entry(&mut self, key: String) -> MapEntry<'_, String, Entry> {
-        self.evict_if_expired(&key);
-        self.0.entry(key)
-    }
-
-    fn insert(&mut self, key: String, entry: Entry) {
-        self.0.insert(key, entry);
-    }
-
-    fn keys(&self) -> impl Iterator<Item = &String> {
-        self.0.keys()
-    }
-
-    fn is_expired(&self, key: &str) -> bool {
-        self.0.get(key).is_some_and(|entry| entry.is_expired())
-    }
-
-    fn remove(&mut self, key: &str) {
-        self.0.remove(key);
-    }
-
-    fn evict_if_expired(&mut self, key: &str) {
-        if self.is_expired(key) {
-            self.0.remove(key);
-        }
-    }
-
-    /// Removes any expired keys among a random sample, so that keys with a
-    /// TTL that are never accessed again don't linger in memory forever.
-    fn remove_expired(&mut self) {
-        let expired: Vec<String> = self
-            .keys()
-            .choose_multiple(&mut rand::thread_rng(), EXPIRY_SAMPLE_SIZE)
-            .into_iter()
-            .filter(|key| self.is_expired(key))
-            .cloned()
-            .collect();
-
-        for key in expired {
-            self.remove(&key);
-        }
-    }
-}
 
 #[derive(Clone, Default)]
 pub struct Store {
@@ -135,7 +44,13 @@ impl Store {
 
     pub fn set(&self, key: String, value: String, ttl: Option<Duration>) {
         let expires_at = ttl.map(|d| Instant::now() + d);
-        self.data.lock().unwrap().insert(
+        let mut data = self.data.lock().unwrap();
+
+        if let Some(Entry { value: Value::List(list), .. }) = data.get(&key) {
+            list.cancel_waiters();
+        }
+
+        data.insert(
             key,
             Entry {
                 value: Value::String(value),
@@ -150,14 +65,11 @@ impl Store {
         let mut data = self.data.lock().unwrap();
 
         match data.entry(key) {
-            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
-                Value::List(list) => {
-                    list.extend(values);
-                    Ok(list.len())
-                }
+            MapEntry::Occupied(occupied) => match &occupied.get().value {
+                Value::List(list) => Ok(list.push_back(values)),
                 Value::String(_) => Err(wrong_type_error()),
             },
-            MapEntry::Vacant(vacant) => Ok(insert_new_list(vacant, values)),
+            MapEntry::Vacant(vacant) => Ok(create_list(vacant).push_back(values)),
         }
     }
 
@@ -166,19 +78,13 @@ impl Store {
     /// exist, and returns the list's length after prepending.
     pub fn lpush(&self, key: String, values: Vec<String>) -> Result<usize, RespMessage> {
         let mut data = self.data.lock().unwrap();
-        let mut values = values;
-        values.reverse();
 
         match data.entry(key) {
-            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
-                Value::List(list) => {
-                    values.append(list);
-                    *list = values;
-                    Ok(list.len())
-                }
+            MapEntry::Occupied(occupied) => match &occupied.get().value {
+                Value::List(list) => Ok(list.push_front(values)),
                 Value::String(_) => Err(wrong_type_error()),
             },
-            MapEntry::Vacant(vacant) => Ok(insert_new_list(vacant, values)),
+            MapEntry::Vacant(vacant) => Ok(create_list(vacant).push_front(values)),
         }
     }
 
@@ -187,31 +93,11 @@ impl Store {
     /// the same out-of-range clamping rules as Redis's `LRANGE`.
     pub fn lrange(&self, key: &str, start: i64, stop: i64) -> Result<Vec<String>, RespMessage> {
         let mut data = self.data.lock().unwrap();
-
-        let list = match data.get(key) {
-            Some(Entry {
-                value: Value::List(list),
-                ..
-            }) => list,
-            Some(Entry {
-                value: Value::String(_),
-                ..
-            }) => return Err(wrong_type_error()),
-            None => return Ok(Vec::new()),
-        };
-
-        let len = list.len() as i64;
-        let start = if start < 0 { (len + start).max(0) } else { start };
-        let mut stop: i64 = if stop < 0 { len + stop } else { stop };
-
-        if start > stop || start >= len {
-            return Ok(Vec::new());
+        match data.get(key) {
+            Some(Entry { value: Value::List(list), .. }) => Ok(list.range(start, stop)),
+            Some(Entry { value: Value::String(_), .. }) => Err(wrong_type_error()),
+            None => Ok(Vec::new()),
         }
-        if stop >= len {
-            stop = len - 1;
-        }
-
-        Ok(list[start as usize..=stop as usize].to_vec())
     }
 
     /// Returns the length of the list at `key`, or 0 if it doesn't exist.
@@ -225,18 +111,17 @@ impl Store {
     }
 
     /// Removes and returns up to `count` elements from the front of the list
-    /// at `key`. Returns `None` if the key doesn't exist (distinct from `Some(vec![])`,
-    /// which means the key exists but `count` was 0). The key is removed
-    /// entirely once its list becomes empty.
+    /// at `key`, without blocking. Returns `None` if the key doesn't exist
+    /// (distinct from `Some(vec![])`, which means the key exists but `count`
+    /// was 0). The key is removed entirely once its list becomes idle.
     pub fn lpop(&self, key: &str, count: usize) -> Result<Option<Vec<String>>, RespMessage> {
         let mut data = self.data.lock().unwrap();
 
         match data.entry(key.to_string()) {
-            MapEntry::Occupied(mut occupied) => match &mut occupied.get_mut().value {
+            MapEntry::Occupied(occupied) => match &occupied.get().value {
                 Value::List(list) => {
-                    let count = count.min(list.len());
-                    let popped: Vec<String> = list.drain(..count).collect();
-                    if list.is_empty() {
+                    let popped = list.pop_front(count);
+                    if list.is_idle() {
                         occupied.remove();
                     }
                     Ok(Some(popped))
@@ -245,5 +130,24 @@ impl Store {
             },
             MapEntry::Vacant(_) => Ok(None),
         }
+    }
+
+    /// Removes and returns the front element of the list at `key`, blocking
+    /// until one becomes available or `timeout` elapses (waiting forever if
+    /// `timeout` is `None`). Multiple clients blocked on the same key are
+    /// served in the order they started waiting.
+    pub async fn blpop(&self, key: String, timeout: Option<Duration>) -> Result<Option<String>, RespMessage> {
+        let list = {
+            let mut data = self.data.lock().unwrap();
+            match data.entry(key) {
+                MapEntry::Occupied(occupied) => match &occupied.get().value {
+                    Value::List(list) => Arc::clone(list),
+                    Value::String(_) => return Err(wrong_type_error()),
+                },
+                MapEntry::Vacant(vacant) => create_list(vacant),
+            }
+        };
+
+        Ok(list.pop_blocking(timeout).await)
     }
 }
