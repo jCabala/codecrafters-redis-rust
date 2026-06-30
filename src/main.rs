@@ -211,6 +211,37 @@ async fn run_request(stream: &mut TcpStream, store: &Store) -> std::io::Result<b
                     ),
                 }
             }
+            CommandName::Xrange => {
+                match (
+                    command.args.first(),
+                    command.args.get(1),
+                    command.args.get(2),
+                ) {
+                    (Some(key), Some(start), Some(end)) => match store.xrange(key, start, end) {
+                        Ok(entries) => RespMessage::Array(
+                            entries
+                                .into_iter()
+                                .map(|(id, fields)| {
+                                    let fields = fields
+                                        .into_iter()
+                                        .flat_map(|(field, value)| {
+                                            [RespMessage::BulkString(field), RespMessage::BulkString(value)]
+                                        })
+                                        .collect();
+                                    RespMessage::Array(vec![
+                                        RespMessage::BulkString(id),
+                                        RespMessage::Array(fields),
+                                    ])
+                                })
+                                .collect(),
+                        ),
+                        Err(err) => err,
+                    },
+                    _ => RespMessage::Error(
+                        "ERR wrong number of arguments for 'xrange' command".to_string(),
+                    ),
+                }
+            }
         },
         Err(err) => err,
     };

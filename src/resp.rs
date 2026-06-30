@@ -48,6 +48,7 @@ pub enum CommandName {
     Blpop,
     Type,
     Xadd,
+    Xrange,
 }
 
 impl CommandName {
@@ -67,6 +68,7 @@ impl CommandName {
             "BLPOP" => Ok(CommandName::Blpop),
             "TYPE" => Ok(CommandName::Type),
             "XADD" => Ok(CommandName::Xadd),
+            "XRANGE" => Ok(CommandName::Xrange),
             _ => Err(name.to_string()),
         }
     }

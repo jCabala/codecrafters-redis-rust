@@ -11,6 +11,7 @@ use std::collections::hash_map::Entry as MapEntry;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use stream::Stream;
+use stream_id::StreamId;
 
 /// How often to run the active expiry sweep.
 const EXPIRY_SWEEP_INTERVAL: Duration = Duration::from_millis(1000);
@@ -193,6 +194,26 @@ impl Store {
                 }
                 result
             }
+        }
+    }
+
+    /// Returns the entries of the stream at `key` with ids between `start`
+    /// and `end` (inclusive). Each entry is its id paired with its
+    /// field-value pairs in insertion order.
+    pub fn xrange(
+        &self,
+        key: &str,
+        start: &str,
+        end: &str,
+    ) -> Result<Vec<(String, Vec<(String, String)>)>, RespMessage> {
+        let start = StreamId::parse_range_start(start).ok_or_else(stream_id::invalid_id_error)?;
+        let end = StreamId::parse_range_end(end).ok_or_else(stream_id::invalid_id_error)?;
+
+        let mut data = self.data.lock().unwrap();
+        match data.get(key) {
+            Some(Entry { value: Value::Stream(stream), .. }) => Ok(stream.range(start, end)),
+            Some(Entry { value: Value::String(_) | Value::List(_), .. }) => Err(wrong_type_error()),
+            None => Ok(Vec::new()),
         }
     }
 }

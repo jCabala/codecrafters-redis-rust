@@ -1,9 +1,8 @@
 //! A stream value: an append-only, ordered sequence of entries.
 
-use super::stream_id::{StreamId, StreamIdSpec};
+use super::stream_id::{invalid_id_error, StreamId, StreamIdSpec};
 use crate::resp::RespMessage;
 
-#[allow(dead_code)]
 struct StreamEntry {
     id: StreamId,
     fields: Vec<(String, String)>,
@@ -30,11 +29,7 @@ impl Stream {
         id: &str,
         fields: Vec<(String, String)>,
     ) -> Result<String, RespMessage> {
-        let spec = StreamIdSpec::parse(id).ok_or_else(|| {
-            RespMessage::Error(
-                "ERR Invalid stream ID specified as stream command argument".to_string(),
-            )
-        })?;
+        let spec = StreamIdSpec::parse(id).ok_or_else(invalid_id_error)?;
 
         let last_id = self.entries.last().map_or(StreamId::ZERO, |entry| entry.id);
         let id = spec.resolve(last_id);
@@ -53,5 +48,14 @@ impl Stream {
 
         self.entries.push(StreamEntry { id, fields });
         Ok(id.to_string())
+    }
+
+    /// Returns the entries with ids between `start` and `end`, inclusive.
+    pub(super) fn range(&self, start: StreamId, end: StreamId) -> Vec<(String, Vec<(String, String)>)> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.id >= start && entry.id <= end)
+            .map(|entry| (entry.id.to_string(), entry.fields.clone()))
+            .collect()
     }
 }

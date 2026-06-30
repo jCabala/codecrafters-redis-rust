@@ -1,8 +1,13 @@
 //! A stream entry ID: `<millisecondsTime>-<sequenceNumber>`, with support
 //! for the explicit, partial-auto, and fully-auto formats `XADD` accepts.
 
+use crate::resp::RespMessage;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+pub(super) fn invalid_id_error() -> RespMessage {
+    RespMessage::Error("ERR Invalid stream ID specified as stream command argument".to_string())
+}
 
 /// A concrete, resolved stream entry ID. Deriving `Ord` gives exactly
 /// Redis's comparison rule, since it compares `ms` first and `seq` second,
@@ -21,6 +26,31 @@ impl StreamId {
     fn next_seq(ms: u64, last_id: StreamId) -> StreamId {
         let seq = if ms == last_id.ms { last_id.seq + 1 } else { 0 };
         StreamId { ms, seq }
+    }
+
+    /// Parses an `XRANGE` start bound: `<ms>-<seq>`, or just `<ms>` (in
+    /// which case the sequence number defaults to 0).
+    pub(super) fn parse_range_start(value: &str) -> Option<StreamId> {
+        Self::parse_bound(value, 0)
+    }
+
+    /// Parses an `XRANGE` end bound: `<ms>-<seq>`, or just `<ms>` (in which
+    /// case the sequence number defaults to the maximum possible value).
+    pub(super) fn parse_range_end(value: &str) -> Option<StreamId> {
+        Self::parse_bound(value, u64::MAX)
+    }
+
+    fn parse_bound(value: &str, default_seq: u64) -> Option<StreamId> {
+        match value.split_once('-') {
+            Some((ms, seq)) => Some(StreamId {
+                ms: ms.parse().ok()?,
+                seq: seq.parse().ok()?,
+            }),
+            None => Some(StreamId {
+                ms: value.parse().ok()?,
+                seq: default_seq,
+            }),
+        }
     }
 }
 
